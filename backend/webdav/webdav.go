@@ -1034,6 +1034,43 @@ func (f *Fs) _pathExists(ctx context.Context, filePath string) (exists bool, err
 	return true, nil
 }
 
+// _dirExists checks whether dirPath exists and is a collection.
+func (f *Fs) _dirExists(ctx context.Context, dirPath string) (exists bool, err error) {
+	opts := rest.Opts{
+		Method: "PROPFIND",
+		Path:   addSlash(dirPath),
+		ExtraHeaders: map[string]string{
+			"Depth": "0",
+		},
+	}
+	var result api.Multistatus
+	var resp *http.Response
+
+	err = f.pacer.Call(func() (bool, error) {
+		resp, err = f.srv.CallXML(ctx, &opts, nil, &result)
+		return f.shouldRetry(ctx, resp, err)
+	})
+	if err != nil {
+		var apiErr *api.Error
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			return false, nil
+		}
+		return false, err
+	}
+	if len(result.Responses) == 0 {
+		return false, errors.New("PROPFIND returned no responses")
+	}
+
+	item := &result.Responses[0]
+	if !item.Props.StatusOK() && item.Props.Code() != http.StatusTooEarly {
+		if item.Props.Code() == http.StatusNotFound {
+			return false, nil
+		}
+		return false, fmt.Errorf("PROPFIND returned status %q", item.Props.Status)
+	}
+	return itemIsDir(item), nil
+}
+
 // low level mkdir, only makes the directory, doesn't attempt to create parents
 func (f *Fs) _mkdir(ctx context.Context, dirPath string) error {
 	// We assume the root is already created
@@ -1053,27 +1090,25 @@ func (f *Fs) _mkdir(ctx context.Context, dirPath string) error {
 		resp, err := f.srv.Call(ctx, &opts)
 		return f.shouldRetry(ctx, resp, err)
 	})
-	if apiErr, ok := err.(*api.Error); ok {
-		// Check if it already exists. The response code for this isn't
-		// defined in the RFC so the implementations vary wildly.
-		//
-		// owncloud returns 423/StatusLocked if the create is already in progress
-		if apiErr.StatusCode == http.StatusMethodNotAllowed || apiErr.StatusCode == http.StatusNotAcceptable || apiErr.StatusCode == http.StatusLocked {
-			return nil
-		}
-		// 4shared returns a 409/StatusConflict here which clashes
-		// horribly with the intermediate paths don't exist meaning. So
-		// check to see if actually exists. This will correct other
-		// error codes too.
-		exists, existsErr := f._pathExists(ctx, dirPath)
-		if existsErr != nil {
-			return fmt.Errorf("MKCOL %q failed: %w; checking path existence also failed: %w", dirPath, err, existsErr)
-		}
-		if exists {
-			return nil
-		}
-
+	if err == nil {
+		return nil
 	}
+
+	// Check if target exists.
+	//
+	// WebDAV servers use different status codes when MKCOL targets an
+	// existing collection. Confirm the resource type before treating the
+	// operation as idempotently successful.
+	exists, existsErr := f._dirExists(ctx, dirPath)
+	if existsErr != nil {
+		return fmt.Errorf("MKCOL %q failed: %w; checking path existence also failed: %w", dirPath, err, existsErr)
+	}
+	if exists {
+		return nil
+	}
+
+	// The target either does not exist as a directory, or is another
+	// resource such as a file. Preserve the original MKCOL error.
 	return err
 }
 
