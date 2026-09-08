@@ -1013,15 +1013,15 @@ func (f *Fs) _pathExists(ctx context.Context, filePath string) (exists bool, err
 	opts := rest.Opts{
 		Method: "PROPFIND",
 		Path:   filePath,
+		NoResponse: true,
 		ExtraHeaders: map[string]string{
 			"Depth": "0",
 		},
 	}
-	var result api.Multistatus
 	var resp *http.Response
 
 	err = f.pacer.Call(func() (bool, error) {
-		resp, err = f.srv.CallXML(ctx, &opts, nil, &result)
+		resp, err = f.srv.Call(ctx, &opts)
 		return f.shouldRetry(ctx, resp, err)
 	})
 	if err != nil {
@@ -1067,7 +1067,7 @@ func (f *Fs) _mkdir(ctx context.Context, dirPath string) error {
 		// error codes too.
 		exists, existsErr := f._pathExists(ctx, dirPath)
 		if existsErr != nil {
-			return fmt.Errorf("check path existence: %w", existsErr)
+			return fmt.Errorf("MKCOL %q failed: %w; checking path existence also failed: %w", dirPath, err, existsErr)
 		}
 		if exists {
 			return nil
