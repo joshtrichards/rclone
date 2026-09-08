@@ -1009,7 +1009,7 @@ func (f *Fs) mkParentDir(ctx context.Context, dirPath string) (err error) {
 // _dirExists - list dirPath to see if it exists
 //
 // dirPath should be a native path ending in a /
-func (f *Fs) _dirExists(ctx context.Context, dirPath string) (exists bool) {
+func (f *Fs) _dirExists(ctx context.Context, dirPath string) (exists bool, err error) {
 	opts := rest.Opts{
 		Method: "PROPFIND",
 		Path:   dirPath,
@@ -1019,12 +1019,19 @@ func (f *Fs) _dirExists(ctx context.Context, dirPath string) (exists bool) {
 	}
 	var result api.Multistatus
 	var resp *http.Response
-	var err error
+
 	err = f.pacer.Call(func() (bool, error) {
 		resp, err = f.srv.CallXML(ctx, &opts, nil, &result)
 		return f.shouldRetry(ctx, resp, err)
 	})
-	return err == nil
+	if err != nil {
+		var apiErr *api.Error
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // low level mkdir, only makes the directory, doesn't attempt to create parents
@@ -1058,7 +1065,11 @@ func (f *Fs) _mkdir(ctx context.Context, dirPath string) error {
 		// horribly with the intermediate paths don't exist meaning. So
 		// check to see if actually exists. This will correct other
 		// error codes too.
-		if f._dirExists(ctx, dirPath) {
+		exists, existsErr := f._dirExists(ctx, dirPath)
+		if existsErr != nil {
+			return fmt.Errorf("check directory existence: %w", existsErr)
+		}
+		if exists {
 			return nil
 		}
 
@@ -1266,12 +1277,12 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
 	dstPath := f.filePath(dstRemote)
 
 	// Check if destination exists
-	_, err := f.dirNotEmpty(ctx, dstRemote)
-	if err == nil {
-		return fs.ErrorDirExists
+	exists, err := f._dirExists(ctx, f.dirPath(dstRemote))
+	if err != nil {
+		return fmt.Errorf("DirMove check destination: %w", err)
 	}
-	if err != fs.ErrorDirNotFound {
-		return fmt.Errorf("DirMove dirExists dst failed: %w", err)
+	if exists {
+		return fs.ErrorDirExists
 	}
 
 	// Make sure the parent directory exists
