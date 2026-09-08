@@ -1006,13 +1006,13 @@ func (f *Fs) mkParentDir(ctx context.Context, dirPath string) (err error) {
 	return f.mkdir(ctx, parent)
 }
 
-// _dirExists - list dirPath to see if it exists
+// _pathExists checks whether filePath exists.
 //
-// dirPath should be a native path ending in a /
-func (f *Fs) _dirExists(ctx context.Context, dirPath string) (exists bool, err error) {
+// It returns false only when the server returns 404 Not Found.
+func (f *Fs) _pathExists(ctx context.Context, filePath string) (exists bool, err error) {
 	opts := rest.Opts{
 		Method: "PROPFIND",
-		Path:   dirPath,
+		Path:   filePath,
 		ExtraHeaders: map[string]string{
 			"Depth": "0",
 		},
@@ -1065,9 +1065,9 @@ func (f *Fs) _mkdir(ctx context.Context, dirPath string) error {
 		// horribly with the intermediate paths don't exist meaning. So
 		// check to see if actually exists. This will correct other
 		// error codes too.
-		exists, existsErr := f._dirExists(ctx, dirPath)
+		exists, existsErr := f._pathExists(ctx, dirPath)
 		if existsErr != nil {
-			return fmt.Errorf("check directory existence: %w", existsErr)
+			return fmt.Errorf("check path existence: %w", existsErr)
 		}
 		if exists {
 			return nil
@@ -1277,7 +1277,7 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
 	dstPath := f.filePath(dstRemote)
 
 	// Check if destination exists
-	exists, err := f._dirExists(ctx, f.dirPath(dstRemote))
+	exists, err := f._pathExists(ctx, dstPath)
 	if err != nil {
 		return fmt.Errorf("DirMove check destination: %w", err)
 	}
